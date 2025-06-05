@@ -4,3 +4,6 @@ numpy
 plotly.express
 plotly.graph_objects
 statsmodels
+matplotlib
+pydeck
+plotly
