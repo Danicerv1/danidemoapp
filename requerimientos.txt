@@ -1,4 +1,6 @@
 streamlit
 pandas
-matplotlib
-pydeck
+numpy
+plotly.express
+plotly.graph_objects
+statsmodels
