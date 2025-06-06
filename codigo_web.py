@@ -25,6 +25,11 @@ if uploaded_file is not None:
     df["CPK total"] = pd.to_numeric(df["CPK total"], errors="coerce")
     df = df[df["CPK total"].notna() & df["CPK total"].apply(np.isfinite)]
 
+    # --- Filtrar solo las primeras 10 Unidades y 10 Flotas ---
+    top_unidades = df["Unidad"].dropna().unique()[:10]
+    top_flotas = df["Flota"].dropna().unique()[:10]
+    df = df[df["Unidad"].isin(top_unidades) & df["Flota"].isin(top_flotas)]
+
 else:
     st.warning("Sube un archivo para visualizar el dashboard.")
     st.stop()
@@ -32,8 +37,8 @@ else:
 # --- Filtros estilo dropdown limpio ---
 st.sidebar.title("🧰 Filtros")
 
-opciones_unidades = sorted(df["Unidad"].dropna().astype(str).unique())
-opciones_flotas = sorted(df["Flota"].dropna().astype(str).unique())
+opciones_unidades = sorted(df["Unidad"].dropna().unique())
+opciones_flotas = sorted(df["Flota"].dropna().unique())
 
 with st.sidebar.expander("🔧 Filtro por Unidades", expanded=False):
     unidades_sel = st.multiselect("Selecciona una o más unidades:", opciones_unidades, default=opciones_unidades)
