@@ -11,28 +11,43 @@ st.set_page_config(page_title="Dashboard CPK TDR", layout="wide")
 st.sidebar.title("📁 Cargar archivo")
 uploaded_file = st.sidebar.file_uploader("Sube tu archivo CSV con datos de TDR", type=["csv"])
 
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-
-    columnas_necesarias = ["Unidad", "Flota", "Semana_datetime", "CPK total", "kmstotales"]
-    if not all(col in df.columns for col in columnas_necesarias):
-        st.error("⚠️ El archivo no contiene todas las columnas necesarias.")
-        st.stop()
-
-    df["Unidad"] = df["Unidad"].astype(str)
-    df["Flota"] = df["Flota"].astype(str)
-    df["Semana_str"] = pd.to_datetime(df["Semana_datetime"], errors="coerce").dt.strftime("%Y-%m-%d")
-    df["CPK total"] = pd.to_numeric(df["CPK total"], errors="coerce")
-    df = df[df["CPK total"].notna() & df["CPK total"].apply(np.isfinite)]
-
-    # --- Filtrar solo las primeras 10 Unidades y 10 Flotas ---
-    top_unidades = df["Unidad"].dropna().unique()[:10]
-    top_flotas = df["Flota"].dropna().unique()[:10]
-    df = df[df["Unidad"].isin(top_unidades) & df["Flota"].isin(top_flotas)]
-
-else:
+if uploaded_file is None:
     st.warning("Sube un archivo para visualizar el dashboard.")
     st.stop()
+
+df = pd.read_csv(uploaded_file)
+
+columnas_necesarias = ["Unidad", "Flota", "Semana_datetime", "CPK total", "kmstotales"]
+if not all(col in df.columns for col in columnas_necesarias):
+    st.error("⚠ El archivo no contiene todas las columnas necesarias.")
+    st.stop()
+
+df["Unidad"] = df["Unidad"].astype(str)
+df["Flota"] = df["Flota"].astype(str)
+df["Semana_str"] = pd.to_datetime(df["Semana_datetime"], errors="coerce").dt.strftime("%Y-%m-%d")
+df["CPK total"] = pd.to_numeric(df["CPK total"], errors="coerce")
+df = df[df["CPK total"].notna() & df["CPK total"].apply(np.isfinite)]
+
+# --- Top 10 Unidades con mayor CPK total ---
+top_unidades = (
+    df.groupby("Unidad")["CPK total"]
+    .sum()
+    .sort_values(ascending=False)
+    .head(10)
+    .index
+)
+
+# --- Top 10 Flotas con mayor CPK total ---
+top_flotas = (
+    df.groupby("Flota")["CPK total"]
+    .sum()
+    .sort_values(ascending=False)
+    .head(10)
+    .index
+)
+
+# --- Filtrar el DataFrame ---
+df = df[df["Unidad"].isin(top_unidades) & df["Flota"].isin(top_flotas)]
 
 # --- Filtros estilo dropdown limpio ---
 st.sidebar.title("🧰 Filtros")
@@ -73,7 +88,7 @@ vista = st.sidebar.radio("Selecciona una vista:", [
 if vista == "Boxplot CPK por Unidad":
     st.title("Boxplot de CPK total por Unidad")
     fig = px.box(df_filtrado, x="Unidad", y="CPK total", points="outliers")
-    fig.update_layout(xaxis={'categoryorder':'total descending'})
+    fig.update_layout(xaxis={'categoryorder': 'total descending'})
     st.plotly_chart(fig, use_container_width=True)
 
 elif vista == "Barplot CPK por Unidad":
