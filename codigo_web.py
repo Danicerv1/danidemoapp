@@ -2,144 +2,167 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-import statsmodels.api as sm
+from io import BytesIO
 
-st.set_page_config(page_title="Dashboard CPK TDR", layout="wide")
+st.set_page_config(page_title="Dashboard CPK TDR", layout="wide", page_icon="🚛")
 
-# --- Cargar archivo CSV ---
+# --- Estilo TDR ---
+st.markdown("""
+    <style>
+    .stSidebar { background-color: #002F6C !important; }
+    .stSidebar h1, .stSidebar h2, .stSidebar h3, .stSidebar p, .stSidebar span {
+        color: white !important;
+    }
+    h1, h2 { color: #002F6C; font-weight: bold; }
+    .stButton>button {
+        background-color: #FFD100;
+        color: #002F6C;
+        font-weight: bold;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- Cargar archivo ---
 st.sidebar.title("📁 Cargar archivo")
-uploaded_file = st.sidebar.file_uploader("Sube tu archivo CSV con datos de TDR", type=["csv"])
+uploaded_file = st.sidebar.file_uploader("Sube tu archivo CSV con datos TDR", type=["csv"])
 
 if uploaded_file is None:
-    st.warning("Sube un archivo para visualizar el dashboard.")
+    st.warning("⚠ Sube un archivo CSV para comenzar.")
     st.stop()
 
 df = pd.read_csv(uploaded_file)
 
-columnas_necesarias = ["Unidad", "Flota", "Semana_datetime", "CPK total", "kmstotales"]
-if not all(col in df.columns for col in columnas_necesarias):
-    st.error("⚠ El archivo no contiene todas las columnas necesarias.")
-    st.stop()
-
+# --- Preprocesamiento ---
+df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
 df["Unidad"] = df["Unidad"].astype(str)
 df["Flota"] = df["Flota"].astype(str)
-df["Semana_str"] = pd.to_datetime(df["Semana_datetime"], errors="coerce").dt.strftime("%Y-%m-%d")
-df["CPK total"] = pd.to_numeric(df["CPK total"], errors="coerce")
-df = df[df["CPK total"].notna() & df["CPK total"].apply(np.isfinite)]
+df["Tipo de Carga"] = df["Tipo de Carga"].astype(str)
+df["Mes"] = df["Fecha"].dt.month
+df["Año"] = df["Fecha"].dt.year
 
-# --- Top 10 Unidades con mayor CPK total ---
-top_unidades = (
-    df.groupby("Unidad")["CPK total"]
-    .sum()
-    .sort_values(ascending=False)
-    .head(10)
-    .index
-)
+# --- Sidebar Filtros básicos ---
+st.sidebar.title("🔎 Filtros")
 
-# --- Top 10 Flotas con mayor CPK total ---
-top_flotas = (
-    df.groupby("Flota")["CPK total"]
-    .sum()
-    .sort_values(ascending=False)
-    .head(10)
-    .index
-)
+mostrar_top = st.sidebar.checkbox("🎯 Solo mostrar top 10 mayor y menor CPK", value=False)
 
-# --- Filtrar el DataFrame ---
-df = df[df["Unidad"].isin(top_unidades) & df["Flota"].isin(top_flotas)]
+if not mostrar_top:
+    flotas = st.sidebar.multiselect("Selecciona Flotas", sorted(df["Flota"].dropna().unique()))
+    unidades = st.sidebar.multiselect("Selecciona Unidades", sorted(df["Unidad"].dropna().unique()))
+    tipos_carga = st.sidebar.multiselect("Tipo de Carga", sorted(df["Tipo de Carga"].unique()))
 
-# --- Filtros estilo dropdown limpio ---
-st.sidebar.title("🧰 Filtros")
+    fecha_min = df["Fecha"].min().date()
+    fecha_max = df["Fecha"].max().date()
+    rango_fechas = st.sidebar.date_input("Rango de Fechas", [fecha_min, fecha_max])
 
-opciones_unidades = sorted(df["Unidad"].dropna().unique())
-opciones_flotas = sorted(df["Flota"].dropna().unique())
+    cpk_min = float(df["CPK total"].min())
+    cpk_max = float(df["CPK total"].max())
+    rango_cpk = st.sidebar.slider("Rango de CPK total", cpk_min, cpk_max, (cpk_min, cpk_max))
 
-with st.sidebar.expander("🔧 Filtro por Unidades", expanded=False):
-    unidades_sel = st.multiselect("Selecciona una o más unidades:", opciones_unidades, default=opciones_unidades)
+    # --- Aplicar filtros generales ---
+    df_filtrado = df.copy()
+    df_filtrado = df_filtrado[df_filtrado["Fecha"].between(pd.to_datetime(rango_fechas[0]), pd.to_datetime(rango_fechas[1]))]
+    if flotas:
+        df_filtrado = df_filtrado[df_filtrado["Flota"].isin(flotas)]
+    if unidades:
+        df_filtrado = df_filtrado[df_filtrado["Unidad"].isin(unidades)]
+    if tipos_carga:
+        df_filtrado = df_filtrado[df_filtrado["Tipo de Carga"].isin(tipos_carga)]
+    df_filtrado = df_filtrado[df_filtrado["CPK total"].between(*rango_cpk)]
 
-with st.sidebar.expander("🚚 Filtro por Flotas", expanded=False):
-    flotas_sel = st.multiselect("Selecciona una o más flotas:", opciones_flotas, default=opciones_flotas)
+else:
+    st.sidebar.markdown("### 📆 Periodo a analizar")
+    periodo = st.sidebar.selectbox("Selecciona mes o semestre", [
+        "Octubre", "Noviembre", "Diciembre", "Enero", "Febrero", "Marzo", "Semestre Oct-Mar"
+    ])
 
-cpk_min, cpk_max = float(df["CPK total"].min()), float(df["CPK total"].max())
-rango_cpk = st.sidebar.slider("Rango de CPK:", cpk_min, cpk_max, (cpk_min, cpk_max))
+    mes_dict = {
+        "Octubre": (10, 2024),
+        "Noviembre": (11, 2024),
+        "Diciembre": (12, 2024),
+        "Enero": (1, 2025),
+        "Febrero": (2, 2025),
+        "Marzo": (3, 2025)
+    }
 
-# --- Aplicar filtros ---
-df_filtrado = df[
-    (df["Unidad"].isin(unidades_sel)) &
-    (df["Flota"].isin(flotas_sel)) &
-    (df["CPK total"].between(*rango_cpk))
-]
+    if periodo == "Semestre Oct-Mar":
+        filtro = (
+            ((df["Mes"].isin([10,11,12])) & (df["Año"] == 2024)) |
+            ((df["Mes"].isin([1,2,3])) & (df["Año"] == 2025))
+        )
+    else:
+        mes, anio = mes_dict[periodo]
+        filtro = (df["Mes"] == mes) & (df["Año"] == anio)
 
-# --- Navegación de vistas ---
-st.sidebar.title("📊 Visualizaciones")
-vista = st.sidebar.radio("Selecciona una vista:", [
-    "Boxplot CPK por Unidad",
-    "Barplot CPK por Unidad",
-    "Heatmap CPK por Semana",
-    "Tendencia CPK en el Tiempo",
-    "Boxplot por Flota",
-    "Barplot por Flota",
-    "Violin Plot por Flota",
-    "Scatter CPK vs Km"
+    df_periodo = df[filtro]
+    top_10 = df_periodo.groupby("Unidad")["CPK total"].mean().nsmallest(10).index
+    bottom_10 = df_periodo.groupby("Unidad")["CPK total"].mean().nlargest(10).index
+    unidades_top = top_10.union(bottom_10)
+    df_filtrado = df_periodo[df_periodo["Unidad"].isin(unidades_top)]
+
+# --- Visualización principal ---
+st.title("📊 Dashboard de Análisis CPK - TDR")
+
+vista = st.radio("Selecciona una vista:", [
+    "Resumen por Flota",
+    "Boxplot por Unidad",
+    "CPK en el Tiempo",
+    "Heatmap Semanal",
+    "CPK vs Km Totales",
+    "Ver Datos en Tabla"
 ])
 
-# --- Visualizaciones ---
-if vista == "Boxplot CPK por Unidad":
-    st.title("Boxplot de CPK total por Unidad")
-    fig = px.box(df_filtrado, x="Unidad", y="CPK total", points="outliers")
-    fig.update_layout(xaxis={'categoryorder': 'total descending'})
+if vista == "Resumen por Flota":
+    st.subheader("Promedio de CPK total por Flota")
+    resumen = df_filtrado.groupby("Flota")["CPK total"].mean().reset_index().sort_values("CPK total", ascending=False)
+    fig = px.bar(resumen, x="Flota", y="CPK total", color="CPK total", title="CPK promedio por Flota")
     st.plotly_chart(fig, use_container_width=True)
 
-elif vista == "Barplot CPK por Unidad":
-    st.title("Promedio de CPK total por Unidad")
-    df_bar = df_filtrado.groupby("Unidad")["CPK total"].mean().reset_index().sort_values("CPK total", ascending=False)
-    fig = px.bar(df_bar, x="Unidad", y="CPK total", color="CPK total")
+    st.subheader("🏆 Top 10 Unidades con mejor CPK (más bajo)")
+    top_unidades = (
+        df_filtrado.groupby("Unidad")["CPK total"]
+        .mean()
+        .reset_index()
+        .sort_values("CPK total", ascending=True)
+        .head(10)
+    )
+    fig2 = px.bar(top_unidades, x="Unidad", y="CPK total", color="CPK total", title="Top 10 Unidades con CPK más bajo")
+    st.plotly_chart(fig2, use_container_width=True)
+
+elif vista == "Boxplot por Unidad":
+    st.subheader("Boxplot de CPK total por Unidad")
+    fig = px.box(df_filtrado, x="Unidad", y="CPK total", color="Flota", points="outliers")
     st.plotly_chart(fig, use_container_width=True)
 
-elif vista == "Heatmap CPK por Semana":
-    st.title("Heatmap de CPK total por Unidad y Semana")
-    df_pivot = df_filtrado.pivot_table(index="Unidad", columns="Semana_str", values="CPK total", aggfunc="mean")
-    fig = px.imshow(df_pivot, aspect="auto", color_continuous_scale="Viridis",
-                    labels=dict(x="Semana", y="Unidad", color="CPK total"))
+elif vista == "CPK en el Tiempo":
+    st.subheader("Tendencia de CPK total en el tiempo")
+    df_line = df_filtrado.groupby("Fecha")["CPK total"].mean().reset_index()
+    fig = px.line(df_line, x="Fecha", y="CPK total", markers=True)
     st.plotly_chart(fig, use_container_width=True)
 
-elif vista == "Tendencia CPK en el Tiempo":
-    st.title("Tendencia semanal de CPK total")
-    df_trend = df_filtrado.groupby("Semana_str")["CPK total"].mean().reset_index()
-    fig = px.line(df_trend, x="Semana_str", y="CPK total", markers=True)
-
-    x = np.arange(len(df_trend))
-    y = df_trend["CPK total"].values
-    X = sm.add_constant(x)
-    model = sm.OLS(y, X).fit()
-    trend_line = model.predict(X)
-
-    fig.add_trace(go.Scatter(x=df_trend["Semana_str"], y=trend_line,
-                             mode="lines", name="Tendencia", line=dict(color="red")))
+elif vista == "Heatmap Semanal":
+    st.subheader("Heatmap semanal de CPK por Unidad")
+    df_filtrado["Semana"] = df_filtrado["Fecha"].dt.strftime("%Y-%U")
+    pivot = df_filtrado.pivot_table(index="Unidad", columns="Semana", values="CPK total", aggfunc="mean")
+    fig = px.imshow(pivot, aspect="auto", color_continuous_scale="Viridis")
     st.plotly_chart(fig, use_container_width=True)
 
-elif vista == "Boxplot por Flota":
-    st.title("Boxplot de CPK total por Flota")
-    fig = px.box(df_filtrado, x="Flota", y="CPK total", points="outliers", color="Flota")
-    st.plotly_chart(fig, use_container_width=True)
-
-elif vista == "Barplot por Flota":
-    st.title("Promedio de CPK total por Flota")
-    df_flota = df_filtrado.groupby("Flota")["CPK total"].mean().reset_index().sort_values("CPK total", ascending=False)
-    fig = px.bar(df_flota, x="Flota", y="CPK total", color="CPK total")
-    st.plotly_chart(fig, use_container_width=True)
-
-elif vista == "Violin Plot por Flota":
-    st.title("Distribución de CPK total por Flota")
-    fig = px.violin(df_filtrado, x="Flota", y="CPK total", box=True, points="all", color="Flota")
-    st.plotly_chart(fig, use_container_width=True)
-
-elif vista == "Scatter CPK vs Km":
-    st.title("Relación entre CPK total y Km recorridos")
-    df_scatter = df_filtrado.groupby(["Unidad", "Flota"]).agg({
+elif vista == "CPK vs Km Totales":
+    st.subheader("Relación entre CPK total y Km recorridos")
+    agrupado = df_filtrado.groupby(["Unidad", "Flota"]).agg({
         "CPK total": "mean", "kmstotales": "sum"
     }).reset_index()
-    fig = px.scatter(df_scatter, x="CPK total", y="kmstotales", color="Flota", size="kmstotales",
-                     hover_data=["Unidad"])
+    fig = px.scatter(agrupado, x="CPK total", y="kmstotales", color="Flota", size="kmstotales", hover_data=["Unidad"])
     st.plotly_chart(fig, use_container_width=True)
+
+elif vista == "Ver Datos en Tabla":
+    st.subheader("📄 Datos filtrados")
+    st.dataframe(df_filtrado)
+
+    buffer = BytesIO()
+    df_filtrado.to_csv(buffer, index=False)
+    st.download_button(
+        label="📥 Descargar CSV filtrado",
+        data=buffer.getvalue(),
+        file_name="TDR_datos_filtrados.csv",
+        mime="text/csv"
+    )
